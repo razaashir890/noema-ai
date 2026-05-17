@@ -25,6 +25,7 @@ const Icons = {
   chevronDown: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>,
   message: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>,
   copy: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>,
+  user: (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
 }
 
 // ============================================================
@@ -42,6 +43,8 @@ export default function App() {
   const [expandedSources, setExpandedSources] = useState(false)
   const [streamingText, setStreamingText] = useState('')
   const [showCopyToast, setShowCopyToast] = useState(false)
+  const [showProfileModal, setShowProfileModal] = useState(false)
+  const [userProfile, setUserProfile] = useState(null)
 
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
@@ -84,6 +87,14 @@ export default function App() {
     })
   }, [supabaseUrl, supabaseKey])
 
+  // --- LOAD USER PROFILE FROM LOCALSTORAGE ---
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('noema_user_profile')
+      if (saved) setUserProfile(JSON.parse(saved))
+    } catch (e) {}
+  }, [])
+
   // --- LOAD CONVERSATIONS ---
   useEffect(() => {
     loadConversations()
@@ -91,7 +102,6 @@ export default function App() {
 
   const loadConversations = async () => {
     try {
-      // Try Supabase first
       const data = await supabaseFetch('conversations', { order: 'updated_at.desc' })
       if (Array.isArray(data) && data.length >= 0) {
         setConversations(data)
@@ -190,6 +200,11 @@ export default function App() {
     setStreamingText('')
     setExpandedSources(false)
 
+    // Reset textarea height after clearing input
+    if (inputRef.current) {
+      inputRef.current.style.height = '24px'
+    }
+
     // Auto-generate title from first message
     if (messages.length === 0) {
       const title = text.length > 40 ? text.substring(0, 40) + '...' : text
@@ -200,7 +215,12 @@ export default function App() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, conversationId: convId, history: messages }),
+        body: JSON.stringify({
+          message: text,
+          conversationId: convId,
+          history: messages,
+          userProfile: userProfile,
+        }),
       })
 
       if (!res.ok) throw new Error('API request failed')
@@ -229,8 +249,21 @@ export default function App() {
     } finally {
       setIsLoading(false)
       setStreamingText('')
-      loadConversations() // refresh sidebar
+      loadConversations()
     }
+  }
+
+  // --- HANDLE TEXTAREA INPUT (cursor-safe) ---
+  const handleInputChange = (e) => {
+    setInput(e.target.value)
+    // Use requestAnimationFrame to prevent cursor jump
+    // First shrink then expand to get correct scrollHeight
+    const el = e.target
+    requestAnimationFrame(() => {
+      if (!el) return
+      el.style.height = '0px'
+      el.style.height = Math.min(el.scrollHeight, 128) + 'px'
+    })
   }
 
   // --- COPY MESSAGE ---
@@ -238,6 +271,13 @@ export default function App() {
     navigator.clipboard.writeText(text)
     setShowCopyToast(true)
     setTimeout(() => setShowCopyToast(false), 2000)
+  }
+
+  // --- SAVE USER PROFILE ---
+  const saveProfile = (profile) => {
+    setUserProfile(profile)
+    localStorage.setItem('noema_user_profile', JSON.stringify(profile))
+    setShowProfileModal(false)
   }
 
   // --- CONFIDENCE BADGE ---
@@ -251,7 +291,7 @@ export default function App() {
     }
     return (
       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${colors[level]}`}>
-        <span className="w-1.5 h-1.5 rounded-full bg-current" />
+        <span className="w-1.5 h-1.5 rounded-full bg-current flex-shrink-0" />
         {score}% AI Consensus
       </span>
     )
@@ -267,20 +307,20 @@ export default function App() {
           className="w-full flex items-center justify-between px-3 py-2 text-xs text-slate-400 hover:text-slate-300 hover:bg-navy-700/50 transition-colors"
         >
           <span className="flex items-center gap-1.5">
-            <Icons.layers className="w-3.5 h-3.5" />
+            <Icons.layers className="w-3.5 h-3.5 flex-shrink-0" />
             AI Sources ({sources.filter(s => !s.error).length} models)
           </span>
-          <Icons.chevronDown className={`w-3.5 h-3.5 transition-transform ${expandedSources ? 'rotate-180' : ''}`} />
+          <Icons.chevronDown className={`w-3.5 h-3.5 transition-transform flex-shrink-0 ${expandedSources ? 'rotate-180' : ''}`} />
         </button>
         {expandedSources && (
           <div className="border-t border-navy-600/50 p-3 space-y-2">
             {sources.map((source, i) => (
-              <div key={i} className={`p-2 rounded text-xs ${source.error ? 'bg-red-500/5 border border-red-500/10' : 'bg-navy-700/30'}`}>
+              <div key={i} className={`p-2 rounded text-xs overflow-hidden ${source.error ? 'bg-red-500/5 border border-red-500/10' : 'bg-navy-700/30'}`}>
                 <div className="flex items-center justify-between mb-1">
-                  <span className={`font-medium ${source.error ? 'text-red-400' : 'text-amber-400'}`}>
+                  <span className={`font-medium truncate ${source.error ? 'text-red-400' : 'text-amber-400'}`}>
                     {source.model}
                   </span>
-                  {source.error && <span className="text-red-400/60 text-[10px]">Error</span>}
+                  {source.error && <span className="text-red-400/60 text-[10px] flex-shrink-0 ml-2">Error</span>}
                 </div>
                 {!source.error && (
                   <p className="text-slate-500 line-clamp-2 leading-relaxed">
@@ -309,7 +349,7 @@ export default function App() {
           )}
 
           {/* Message content */}
-          <div className={`relative group rounded-2xl px-4 py-3 ${
+          <div className={`relative group rounded-2xl px-4 py-3 overflow-hidden ${
             isUser
               ? 'bg-amber-400 text-navy-900 rounded-br-md'
               : 'glass rounded-bl-md'
@@ -318,7 +358,7 @@ export default function App() {
             {!isUser && (
               <button
                 onClick={() => copyMessage(msg.content)}
-                className="absolute -top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md bg-navy-700 hover:bg-navy-600 text-slate-400 hover:text-white"
+                className="absolute -top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md bg-navy-700 hover:bg-navy-600 text-slate-400 hover:text-white z-10"
                 title="Copy"
               >
                 <Icons.copy className="w-3 h-3" />
@@ -326,7 +366,7 @@ export default function App() {
             )}
 
             {isUser ? (
-              <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+              <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{msg.content}</p>
             ) : (
               <div className="markdown-body text-sm text-slate-200">
                 <ReactMarkdown
@@ -364,35 +404,200 @@ export default function App() {
     )
   }
 
+  // --- USER PROFILE MODAL ---
+  const ProfileModal = () => {
+    const [form, setForm] = useState(userProfile || {
+      name: '',
+      age: '',
+      gender: '',
+      occupation: '',
+      interests: '',
+      communicationStyle: 'friendly',
+      language: 'en',
+    })
+
+    const handleSubmit = (e) => {
+      e.preventDefault()
+      if (!form.name.trim()) return
+      saveProfile(form)
+    }
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fadeIn">
+        {/* Backdrop */}
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowProfileModal(false)} />
+
+        {/* Modal */}
+        <div className="relative w-full max-w-md glass rounded-2xl p-6 max-h-[90vh] overflow-y-auto">
+          {/* Close button */}
+          <button
+            onClick={() => setShowProfileModal(false)}
+            className="absolute top-4 right-4 p-1 rounded-lg hover:bg-navy-700/50 text-slate-400 hover:text-white transition-colors"
+          >
+            <Icons.x className="w-5 h-5" />
+          </button>
+
+          {/* Header */}
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center flex-shrink-0 overflow-hidden">
+              <Icons.user className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-white">Your Profile</h2>
+              <p className="text-xs text-slate-400">Help Noema AI personalize responses for you</p>
+            </div>
+          </div>
+
+          {/* Form */}
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Name */}
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">Name *</label>
+              <input
+                type="text"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="Your name"
+                className="w-full px-3 py-2 rounded-lg bg-navy-700/50 border border-navy-600/50 text-sm text-white placeholder:text-slate-500 outline-none focus:border-amber-400/50 transition-colors"
+                required
+              />
+            </div>
+
+            {/* Age & Gender row */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">Age</label>
+                <input
+                  type="number"
+                  value={form.age}
+                  onChange={(e) => setForm({ ...form, age: e.target.value })}
+                  placeholder="Age"
+                  min="1"
+                  max="120"
+                  className="w-full px-3 py-2 rounded-lg bg-navy-700/50 border border-navy-600/50 text-sm text-white placeholder:text-slate-500 outline-none focus:border-amber-400/50 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">Gender</label>
+                <select
+                  value={form.gender}
+                  onChange={(e) => setForm({ ...form, gender: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-navy-700/50 border border-navy-600/50 text-sm text-white outline-none focus:border-amber-400/50 transition-colors"
+                >
+                  <option value="">Prefer not to say</option>
+                  <option value="male">Male</option>
+                  <option value="female">Female</option>
+                  <option value="non-binary">Non-binary</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Occupation */}
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">Occupation</label>
+              <input
+                type="text"
+                value={form.occupation}
+                onChange={(e) => setForm({ ...form, occupation: e.target.value })}
+                placeholder="e.g. Software Engineer, Student, Doctor"
+                className="w-full px-3 py-2 rounded-lg bg-navy-700/50 border border-navy-600/50 text-sm text-white placeholder:text-slate-500 outline-none focus:border-amber-400/50 transition-colors"
+              />
+            </div>
+
+            {/* Interests */}
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">Interests</label>
+              <input
+                type="text"
+                value={form.interests}
+                onChange={(e) => setForm({ ...form, interests: e.target.value })}
+                placeholder="e.g. Coding, Fitness, Music, Photography"
+                className="w-full px-3 py-2 rounded-lg bg-navy-700/50 border border-navy-600/50 text-sm text-white placeholder:text-slate-500 outline-none focus:border-amber-400/50 transition-colors"
+              />
+            </div>
+
+            {/* Communication Style */}
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">Communication Style</label>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { value: 'friendly', label: 'Friendly' },
+                  { value: 'professional', label: 'Professional' },
+                  { value: 'casual', label: 'Casual' },
+                ].map((style) => (
+                  <button
+                    key={style.value}
+                    type="button"
+                    onClick={() => setForm({ ...form, communicationStyle: style.value })}
+                    className={`px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                      form.communicationStyle === style.value
+                        ? 'bg-amber-400/20 text-amber-400 border border-amber-400/30'
+                        : 'bg-navy-700/50 text-slate-400 border border-navy-600/50 hover:border-navy-500'
+                    }`}
+                  >
+                    {style.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Submit */}
+            <div className="flex gap-3 pt-2">
+              {userProfile && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    localStorage.removeItem('noema_user_profile')
+                    setUserProfile(null)
+                    setShowProfileModal(false)
+                  }}
+                  className="px-4 py-2 rounded-lg text-xs font-medium text-red-400 hover:bg-red-500/10 border border-red-500/20 transition-colors"
+                >
+                  Clear Profile
+                </button>
+              )}
+              <button
+                type="submit"
+                className="flex-1 px-4 py-2.5 rounded-lg bg-amber-400 hover:bg-amber-500 text-navy-900 text-sm font-semibold transition-all hover:shadow-lg hover:shadow-amber-400/20"
+              >
+                Save Profile
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    )
+  }
+
   // --- WELCOME SCREEN ---
   const WelcomeScreen = () => (
-    <div className="flex-1 flex items-center justify-center p-6">
+    <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
       <div className="max-w-2xl w-full text-center animate-fadeIn">
         {/* Logo */}
-        <div className="mb-8">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 mb-6 shadow-lg shadow-amber-400/20">
-            <Icons.brain className="w-10 h-10 text-white" />
+        <div className="mb-6 sm:mb-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 mb-4 sm:mb-6 shadow-lg shadow-amber-400/20 overflow-hidden flex-shrink-0">
+            <Icons.brain className="w-8 h-8 sm:w-10 sm:h-10 text-white flex-shrink-0" />
           </div>
-          <h1 className="text-4xl md:text-5xl font-bold mb-3">
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-2 sm:mb-3 break-words">
             <span className="bg-gradient-to-r from-amber-400 via-orange-400 to-amber-500 bg-clip-text text-transparent">
               Noema AI
             </span>
           </h1>
-          <p className="text-slate-400 text-lg">The Mind Behind All Minds</p>
-          <p className="text-slate-500 text-sm mt-1">Multiple AI perspectives. One superior answer.</p>
+          <p className="text-slate-400 text-base sm:text-lg">The Mind Behind All Minds</p>
+          <p className="text-slate-500 text-xs sm:text-sm mt-1">Multiple AI perspectives. One superior answer.</p>
         </div>
 
         {/* Feature Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mb-6 sm:mb-8">
           {[
             { icon: Icons.layers, title: 'Multi-AI Fusion', desc: 'Combines perspectives from multiple AI models simultaneously' },
             { icon: Icons.brain, title: 'Smart Synthesis', desc: 'Intelligently merges responses into one superior answer' },
             { icon: Icons.shield, title: 'Confidence Scoring', desc: 'See how much AI models agree on each answer' },
           ].map((f, i) => (
-            <div key={i} className="glass rounded-xl p-4 text-left hover:border-amber-400/30 transition-colors">
-              <f.icon className="w-5 h-5 text-amber-400 mb-2" />
-              <h3 className="text-sm font-semibold text-white mb-1">{f.title}</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">{f.desc}</p>
+            <div key={i} className="glass rounded-xl p-3 sm:p-4 text-left hover:border-amber-400/30 transition-colors overflow-hidden">
+              <f.icon className="w-5 h-5 text-amber-400 mb-2 flex-shrink-0" />
+              <h3 className="text-sm font-semibold text-white mb-1 break-words">{f.title}</h3>
+              <p className="text-xs text-slate-400 leading-relaxed break-words">{f.desc}</p>
             </div>
           ))}
         </div>
@@ -408,10 +613,14 @@ export default function App() {
           ].map((prompt, i) => (
             <button
               key={i}
-              onClick={() => { setInput(prompt); inputRef.current?.focus() }}
-              className="block w-full text-left px-4 py-2.5 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-navy-700/50 border border-transparent hover:border-navy-600/50 transition-all"
+              onClick={() => {
+                setInput(prompt)
+                setTimeout(() => inputRef.current?.focus(), 50)
+              }}
+              className="block w-full text-left px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm text-slate-300 hover:text-white hover:bg-navy-700/50 border border-transparent hover:border-navy-600/50 transition-all overflow-hidden"
             >
-              <span className="text-amber-400 mr-2">#</span>{prompt}
+              <span className="text-amber-400 mr-2 flex-shrink-0">#</span>
+              <span className="break-words">{prompt}</span>
             </button>
           ))}
         </div>
@@ -423,7 +632,7 @@ export default function App() {
   const ChatView = () => (
     <div className="flex-1 flex flex-col min-h-0">
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto px-4 md:px-8 py-6">
+      <div className="flex-1 overflow-y-auto px-3 sm:px-4 md:px-8 py-4 sm:py-6">
         <div className="max-w-3xl mx-auto">
           {messages.map((msg) => (
             <MessageBubble key={msg.id} msg={msg} />
@@ -432,11 +641,11 @@ export default function App() {
           {/* Loading Indicator */}
           {isLoading && (
             <div className="animate-fadeIn flex justify-start mb-4">
-              <div className="glass rounded-2xl rounded-bl-md px-4 py-3">
+              <div className="glass rounded-2xl rounded-bl-md px-4 py-3 overflow-hidden">
                 <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-full bg-amber-400 typing-dot" />
-                  <div className="w-2 h-2 rounded-full bg-amber-400 typing-dot" />
-                  <div className="w-2 h-2 rounded-full bg-amber-400 typing-dot" />
+                  <div className="w-2 h-2 rounded-full bg-amber-400 typing-dot flex-shrink-0" />
+                  <div className="w-2 h-2 rounded-full bg-amber-400 typing-dot flex-shrink-0" />
+                  <div className="w-2 h-2 rounded-full bg-amber-400 typing-dot flex-shrink-0" />
                   <span className="ml-2 text-xs text-slate-500">Consulting multiple AIs...</span>
                 </div>
               </div>
@@ -448,25 +657,24 @@ export default function App() {
       </div>
 
       {/* Input Area */}
-      <div className="border-t border-navy-700/50 p-4 md:px-8">
+      <div className="border-t border-navy-700/50 p-3 sm:p-4 md:px-8">
         <div className="max-w-3xl mx-auto">
-          <div className="flex items-end gap-3">
-            <div className="flex-1 glass rounded-2xl px-4 py-3 focus-within:border-amber-400/30 transition-colors">
+          <div className="flex items-end gap-2 sm:gap-3">
+            <div className="flex-1 glass rounded-2xl px-3 sm:px-4 py-2 sm:py-3 focus-within:border-amber-400/30 transition-colors overflow-hidden">
               <textarea
                 ref={inputRef}
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={handleInputChange}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    sendMessage()
+                  }
                 }}
                 placeholder="Ask Noema AI anything..."
                 rows={1}
-                className="w-full bg-transparent text-sm text-white placeholder:text-slate-500 resize-none outline-none max-h-32"
-                style={{ minHeight: '24px', height: 'auto' }}
-                onInput={(e) => {
-                  e.target.style.height = 'auto'
-                  e.target.style.height = Math.min(e.target.scrollHeight, 128) + 'px'
-                }}
+                className="w-full bg-transparent text-sm text-white placeholder:text-slate-500 resize-none outline-none leading-6"
+                style={{ minHeight: '24px', maxHeight: '128px', overflow: 'hidden' }}
               />
             </div>
             <button
@@ -474,10 +682,10 @@ export default function App() {
               disabled={!input.trim() || isLoading}
               className="flex-shrink-0 w-10 h-10 rounded-xl bg-amber-400 hover:bg-amber-500 disabled:bg-navy-600 disabled:text-slate-500 text-navy-900 flex items-center justify-center transition-all hover:shadow-lg hover:shadow-amber-400/20 disabled:shadow-none"
             >
-              <Icons.send className="w-4 h-4" />
+              <Icons.send className="w-4 h-4 flex-shrink-0" />
             </button>
           </div>
-          <p className="text-center text-[10px] text-slate-600 mt-2">
+          <p className="text-center text-[10px] text-slate-600 mt-2 truncate">
             Noema AI synthesizes responses from multiple models. Answers may not always be accurate.
           </p>
         </div>
@@ -492,19 +700,19 @@ export default function App() {
         {/* Header */}
         <div className="p-4 border-b border-navy-700/50">
           <div className="flex items-center gap-3 mb-3">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center">
-              <Icons.brain className="w-4 h-4 text-white" />
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center flex-shrink-0 overflow-hidden">
+              <Icons.brain className="w-4 h-4 text-white flex-shrink-0" />
             </div>
-            <div>
-              <h1 className="text-sm font-bold text-white">Noema AI</h1>
-              <p className="text-[10px] text-slate-500">Multi-AI Platform</p>
+            <div className="min-w-0">
+              <h1 className="text-sm font-bold text-white truncate">Noema AI</h1>
+              <p className="text-[10px] text-slate-500 truncate">Multi-AI Platform</p>
             </div>
           </div>
           <button
             onClick={() => { createConversation(); inputRef.current?.focus() }}
             className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-amber-400/10 hover:bg-amber-400/20 text-amber-400 text-sm font-medium transition-colors"
           >
-            <Icons.plus className="w-4 h-4" />
+            <Icons.plus className="w-4 h-4 flex-shrink-0" />
             New Chat
           </button>
         </div>
@@ -512,7 +720,7 @@ export default function App() {
         {/* Search */}
         <div className="px-3 py-2">
           <div className="relative">
-            <Icons.search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
+            <Icons.search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
             <input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -530,15 +738,15 @@ export default function App() {
               <button
                 key={conv.id}
                 onClick={() => setActiveConvId(conv.id)}
-                className={`w-full text-left px-3 py-2.5 rounded-lg mb-0.5 group transition-colors ${
+                className={`w-full text-left px-3 py-2.5 rounded-lg mb-0.5 group transition-colors overflow-hidden ${
                   activeConvId === conv.id ? 'bg-amber-400/10 text-amber-400' : 'text-slate-400 hover:bg-navy-700/50 hover:text-white'
                 }`}
               >
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-1">
                   <span className="text-xs truncate flex-1 font-medium">{conv.title}</span>
                   <button
                     onClick={(e) => deleteConversation(conv.id, e)}
-                    className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-500/20 text-slate-500 hover:text-red-400 transition-all"
+                    className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-500/20 text-slate-500 hover:text-red-400 transition-all flex-shrink-0"
                   >
                     <Icons.trash className="w-3 h-3" />
                   </button>
@@ -551,9 +759,29 @@ export default function App() {
           )}
         </div>
 
-        {/* Footer */}
-        <div className="p-3 border-t border-navy-700/50">
-          <p className="text-[10px] text-slate-600 text-center">
+        {/* Profile & Footer */}
+        <div className="p-3 border-t border-navy-700/50 space-y-2">
+          {/* Profile button */}
+          <button
+            onClick={() => setShowProfileModal(true)}
+            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-colors text-left overflow-hidden ${
+              userProfile ? 'bg-amber-400/5 hover:bg-amber-400/10 text-slate-300' : 'hover:bg-navy-700/50 text-slate-400 hover:text-white'
+            }`}
+          >
+            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center flex-shrink-0 overflow-hidden">
+              <Icons.user className="w-3.5 h-3.5 text-white flex-shrink-0" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-medium truncate">
+                {userProfile?.name || 'Set up your profile'}
+              </p>
+              {userProfile?.name && (
+                <p className="text-[10px] text-slate-500 truncate">Profile active</p>
+              )}
+            </div>
+          </button>
+
+          <p className="text-[10px] text-slate-600 text-center truncate">
             {supabaseUrl ? 'Connected to Supabase' : 'Configure .env for database'}
           </p>
         </div>
@@ -563,30 +791,35 @@ export default function App() {
 
   // --- MAIN RENDER ---
   return (
-    <div className="h-screen flex bg-navy-900">
+    <div className="h-screen h-[100dvh] flex bg-navy-900">
       {/* Sidebar */}
       <Sidebar />
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Top Bar */}
-        <header className="flex items-center justify-between px-4 py-3 border-b border-navy-700/50 bg-navy-900/80 backdrop-blur-sm">
+        <header className="flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 border-b border-navy-700/50 bg-navy-900/80 backdrop-blur-sm flex-shrink-0">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="p-2 rounded-lg hover:bg-navy-700/50 text-slate-400 hover:text-white transition-colors"
+            className="p-2 rounded-lg hover:bg-navy-700/50 text-slate-400 hover:text-white transition-colors flex-shrink-0"
           >
             <Icons.menu className="w-5 h-5" />
           </button>
-          <div className="flex items-center gap-2">
-            <Icons.brain className="w-5 h-5 text-amber-400" />
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="w-5 h-5 flex items-center justify-center flex-shrink-0 overflow-hidden">
+              <Icons.brain className="w-5 h-5 text-amber-400" />
+            </div>
             <span className="text-sm font-semibold text-white hidden sm:inline">Noema AI</span>
           </div>
-          <div className="w-9" /> {/* Spacer for balance */}
+          <div className="w-9 flex-shrink-0" /> {/* Spacer for balance */}
         </header>
 
         {/* Content */}
         {activeConvId || messages.length > 0 ? <ChatView /> : <WelcomeScreen />}
       </div>
+
+      {/* Profile Modal */}
+      {showProfileModal && <ProfileModal />}
 
       {/* Copy Toast */}
       {showCopyToast && (
